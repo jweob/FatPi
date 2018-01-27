@@ -58,7 +58,34 @@ def ProcessMeasures(measure_df):
         measure_df[measure_df["DaysSinceLastWeigh"] > 0]['FatItp'] + \
         measure_df[measure_df["DaysSinceLastWeigh"] > 0]['DaysSinceLastWeigh'] * daily_weight_gain
 
+    # Fields for Epochs
+    measure_df['SmoothedWeight'] = measure_df['WeightItp'].rolling(window=7).mean()
+    measure_df['SmoothedWeightGain'] = measure_df['SmoothedWeight'].diff(periods=7)
+    measure_df['GainOrLoss'] = measure_df['SmoothedWeightGain'].map(lambda x: 1 if x >= 0 else -1)
+    measure_df['Transitions'] = measure_df['GainOrLoss'].diff(periods=1)
+    first_index = measure_df.index.tolist()[0]
+    last_index = measure_df.index.tolist()[-1]
+
+    if measure_df.iloc[1]['GainOrLoss'] == -1:
+        measure_df.loc[first_index, 'Transitions'] = -2
+    else:
+        measure_df.iloc[first_index, 'Transitions'] = 2
+
     return measure_df
+
+
+def CreateEpochs(measures):
+    # Line below causes copy warning but don't know why
+    epochs = measures[(measures['Transitions'] != 0) | (measures.index == last_index)]
+
+    epochs['EpochLength'] = epochs['DayNumber'].diff()
+    epochs['EpochWeightGain'] = epochs['SmoothedWeight'].diff()
+    epochs['EpochLength'] = epochs['EpochLength'].shift(-1)
+    epochs['EpochWeightGain'] = epochs['EpochWeightGain'].shift(-1)
+    epochs.insert(0, 'EpochNumber', range(0, len(epochs)))
+
+    epochs = epochs[:-1]
+    return epochs
 
 
 def AnalyseMeasures(measure_df):
@@ -70,7 +97,7 @@ def AnalyseMeasures(measure_df):
     return results
 
 
-def MakeMsg(results):
+def MakeMsg(results, epochs):
     subject = str("You weigh %.2f kg you fat pie" % results["WeightToday"])
     if results["WeightGainRate"] > 0:
         body = str("You are currently gaining weight at %.2f kg per week" % results["WeightGainRate"])
@@ -84,7 +111,13 @@ def MakeMsg(results):
                results["LastWeighedRecord"]["Weight"].tolist()[0],
                daily_weight_gain,
                results["WeightToday"])
-            )
+        )
+
+    body += str("\nYou are in the %dth epoch, which has lasted %d days" \
+                "\nSo far you have gained %.2fkg"
+
+                % (epochs.iloc[-1]['EpochNumber'], epochs.iloc[-1]['EpochLength'], epochs.iloc[-1]['EpochWeightGain'])
+                )
 
     message = 'Subject: {}\n\n{}'.format(subject, body)
     return message
@@ -94,7 +127,8 @@ def PieMail():
     measures = GetMeasures()
     processed = ProcessMeasures(measures)
     results = AnalyseMeasures(processed)
-    msg = MakeMsg(results)
+    epochs = CreateEpochs(measures)
+    msg = MakeMsg(results, epochs)
     SendMail(msg)
     return
 
