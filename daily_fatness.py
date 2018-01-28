@@ -75,6 +75,7 @@ def ProcessMeasures(measure_df):
 
 
 def CreateEpochs(measures):
+    last_index = measures.index.tolist()[-1]
     # Line below causes copy warning but don't know why
     epochs = measures[(measures['Transitions'] != 0) | (measures.index == last_index)]
 
@@ -88,36 +89,53 @@ def CreateEpochs(measures):
     return epochs
 
 
-def AnalyseMeasures(measure_df):
-    results = {}
-    results["WeightToday"] = measure_df.ix[-1, "WeightItp"]
-    results["WeightGainRate"] = (measure_df.ix[-1, "WeightItp"] - measure_df.ix[-15, "WeightItp"]) / 2
-    results["LastWeighedRecord"] = measure_df[measure_df["DaysSinceLastWeigh"] == 0]
-    results["DaysSinceLastWeigh"] = measure_df.tail(1)["DaysSinceLastWeigh"].tolist()[0]
-    return results
+def MakeMsg(measure_df, epochs):
+    weight_today = measure_df.ix[-1, "WeightItp"]
+    weight_gain_rate = (measure_df.ix[-1, "WeightItp"] - measure_df.ix[-15, "WeightItp"]) / 2
+    last_weighed_record = measure_df[measure_df["DaysSinceLastWeigh"] == 0]
+    days_since_last_weigh = measure_df.tail(1)["DaysSinceLastWeigh"].tolist()[0]
 
-
-def MakeMsg(results, epochs):
-    subject = str("You weigh %.2f kg you fat pie" % results["WeightToday"])
-    if results["WeightGainRate"] > 0:
-        body = str("You are currently gaining weight at %.2f kg per week" % results["WeightGainRate"])
+    subject = str("You weigh %.2f kg you fat pie" % weight_today)
+    if weight_gain_rate > 0:
+        body = str("You are currently gaining weight at %.2f kg per week" % weight_gain_rate)
     else:
-        body = str("You are currently losing weight at %.2f kg per week" % -results["WeightGainRate"])
-    if results["DaysSinceLastWeigh"] > 0:
+        body = str("You are currently losing weight at %.2f kg per week" % -weight_gain_rate)
+    if days_since_last_weigh > 0:
         body += str(
             "\nYou last weighed yourself %d days ago when you weighed %.2f. \n"
             "At a weight gain of %.3f kg per day that means you probably now weigh %.2f kg" \
-            % (results["DaysSinceLastWeigh"],
-               results["LastWeighedRecord"]["Weight"].tolist()[0],
+            % (days_since_last_weigh,
+               last_weighed_record["Weight"].tolist()[0],
                daily_weight_gain,
-               results["WeightToday"])
+               weight_today)
         )
+    body += '\n\nWeight today: {:.2f}kg\nA week ago: {:.2f}kg\nA month ago: {:.2f}kg\nA year ago: {:.2f}kg\n5 years ago: {:.2f}kg '.format(
+        measure_df.iloc[-1]['WeightItp'],
+        measure_df.iloc[-8]['WeightItp'],
+        measure_df.iloc[-32]['WeightItp'],
+        measure_df.iloc[-366]['WeightItp'],
+        measure_df.iloc[-1 - 365 * 5]['WeightItp'],
+    )
 
-    body += str("\nYou are in the %dth epoch, which has lasted %d days" \
-                "\nSo far you have gained %.2fkg"
+    body += "\n\nYou are in the {:d}th epoch, which has lasted {} days and began on {}".format(
+        epochs.iloc[-1]['EpochNumber'], int(epochs.iloc[-1]['EpochLength']), epochs.iloc[-1].name.strftime('%Y-%m-%d')
+    )
+    body += "\nSo far this epoch you have {} {:.2f}kg, or {:.2f}kg per week".format(
+        'gained' if epochs.iloc[-1]['EpochWeightGain'] >= 0 else 'lost',
+        abs(epochs.iloc[-1]['EpochWeightGain']),
+        abs(epochs.iloc[-1]['EpochWeightGain']) / epochs.iloc[-1]['EpochLength'] * 7
 
-                % (epochs.iloc[-1]['EpochNumber'], epochs.iloc[-1]['EpochLength'], epochs.iloc[-1]['EpochWeightGain'])
-                )
+    )
+
+    body += "\n\nThe previous epoch lasted {} days and began on {}".format(
+        int(epochs.iloc[-2]['EpochLength']), epochs.iloc[-2].name.strftime('%Y-%m-%d')
+    )
+    body += "\nIn that epoch you {} {:.2f}kg, or {:.2f}kg per week".format(
+        'gained' if epochs.iloc[-2]['EpochWeightGain'] >= 0 else 'lost',
+        abs(epochs.iloc[-2]['EpochWeightGain']),
+        abs(epochs.iloc[-2]['EpochWeightGain']) / epochs.iloc[-2]['EpochLength'] * 7
+
+    )
 
     message = 'Subject: {}\n\n{}'.format(subject, body)
     return message
@@ -126,15 +144,13 @@ def MakeMsg(results, epochs):
 def PieMail():
     measures = GetMeasures()
     processed = ProcessMeasures(measures)
-    results = AnalyseMeasures(processed)
-    epochs = CreateEpochs(measures)
-    msg = MakeMsg(results, epochs)
+    epochs = CreateEpochs(processed)
+    msg = MakeMsg(processed, epochs)
     SendMail(msg)
     return
 
 
 if __name__ == "__main__":
-
     schedule.every().day.at("9:00").do(PieMail)
 
     while True:
